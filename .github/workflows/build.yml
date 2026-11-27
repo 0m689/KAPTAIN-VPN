@@ -1,0 +1,212 @@
+
+name: Build VPN Kaptain APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create Android project
+        run: |
+          mkdir -p app/src/main/java/com/kaptain/vpn
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "KaptainVPN"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.6.1' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.kaptain.vpn'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.kaptain.vpn'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:label="VPN กัปตัน ฟอกสี่">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".MyVpnService"
+                      android:permission="android.permission.BIND_VPN_SERVICE"
+                      android:exported="false">
+                      <intent-filter>
+                          <action android:name="android.net.VpnService"/>
+                      </intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/kaptain/vpn/MainActivity.java <<'EOF'
+          package com.kaptain.vpn;
+          import android.app.*;
+          import android.os.*;
+          import android.content.*;
+          import android.net.VpnService;
+          import android.graphics.Color;
+          import android.widget.*;
+
+          public class MainActivity extends Activity {
+              TextView status;
+              public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  LinearLayout l = new LinearLayout(this);
+                  l.setOrientation(1);
+                  l.setPadding(30,40,30,30);
+                  l.setBackgroundColor(Color.rgb(8,17,38));
+
+                  TextView title = new TextView(this);
+                  title.setText("🛡 VPN กัปตัน ฟอกสี่");
+                  title.setTextSize(26);
+                  title.setTextColor(Color.WHITE);
+                  l.addView(title);
+
+                  TextView sub = new TextView(this);
+                  sub.setText("ALL-IN-ONE PROXY VPN");
+                  sub.setTextColor(Color.CYAN);
+                  l.addView(sub);
+
+                  Spinner s = new Spinner(this);
+                  s.setAdapter(new ArrayAdapter<String>(this,
+                      android.R.layout.simple_spinner_dropdown_item,
+                      new String[]{"HTTP PROXY","SOCKS5 PROXY","FULL VPN"}));
+                  l.addView(s);
+
+                  Button c = new Button(this);
+                  c.setText("CONNECT");
+                  l.addView(c);
+
+                  Button d = new Button(this);
+                  d.setText("DISCONNECT");
+                  l.addView(d);
+
+                  status = new TextView(this);
+                  status.setTextColor(Color.WHITE);
+                  status.setText("Disconnected");
+                  l.addView(status);
+
+                  c.setOnClickListener(v -> {
+                      Intent i = VpnService.prepare(this);
+                      if(i != null) startActivityForResult(i,100);
+                      else startVpn();
+                  });
+                  d.setOnClickListener(v -> {
+                      stopService(new Intent(this,MyVpnService.class));
+                      status.setText("Disconnected");
+                  });
+                  setContentView(l);
+              }
+
+              protected void onActivityResult(int r,int c,Intent d) {
+                  super.onActivityResult(r,c,d);
+                  if(r == 100 && c == RESULT_OK) startVpn();
+              }
+
+              void startVpn() {
+                  startService(new Intent(this,MyVpnService.class));
+                  status.setText("VPN permission granted");
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/kaptain/vpn/MyVpnService.java <<'EOF'
+          package com.kaptain.vpn;
+          import android.net.VpnService;
+          import android.os.ParcelFileDescriptor;
+
+          public class MyVpnService extends VpnService {
+              ParcelFileDescriptor tunnel;
+              public int onStartCommand(android.content.Intent i,int f,int id) {
+                  try {
+                      Builder b = new Builder();
+                      b.setSession("VPN กัปตัน ฟอกสี่");
+                      b.addAddress("10.10.10.2",32);
+                      b.addRoute("0.0.0.0",0);
+                      b.addDnsServer("1.1.1.1");
+                      tunnel = b.establish();
+                      if(tunnel == null) stopSelf();
+                  } catch(Exception e) {
+                      stopSelf();
+                  }
+                  return START_NOT_STICKY;
+              }
+              public void onDestroy() {
+                  try {
+                      if(tunnel != null) tunnel.close();
+                  } catch(Exception e) {}
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAPTAIN-VPN-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          
